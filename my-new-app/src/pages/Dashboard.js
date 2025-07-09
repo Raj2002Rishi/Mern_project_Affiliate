@@ -1,11 +1,11 @@
-import React from 'react'
+import LinksDashboard from './links/LinksDashboard';
 
 function Dashboard() {
-  return (
-    <div className='container text-center'>
-        <h1>User Dashboard Page.</h1>
-    </div>
-  )
+    return (
+        <>
+            <LinksDashboard />
+        </>
+    );
 }
 
-export default Dashboard
+export default Dashboard;
