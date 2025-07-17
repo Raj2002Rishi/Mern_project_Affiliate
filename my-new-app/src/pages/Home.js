@@ -1,13 +1,7 @@
-import { Link } from "react-router-dom";
-
 function Home() {
     return (
         <div className="container text-center">
-            <h1>Welcome to the MERN Auth App</h1>
-            <p>
-                <Link to="/login">Login</Link> |{" "}
-                <Link to="/register">Register</Link>
-            </p>
+            <h1>Welcome to MERN Projects</h1>
         </div>
     );
 }
