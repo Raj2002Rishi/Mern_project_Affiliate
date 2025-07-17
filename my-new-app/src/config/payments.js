@@ -43,4 +43,4 @@ export const pricingList = [
             { detail: "CANCEL ANYTIME", },
         ],
     },
-]; 
+];

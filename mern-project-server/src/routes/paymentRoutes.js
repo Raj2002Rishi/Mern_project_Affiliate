@@ -15,4 +15,4 @@ router.post('/create-subscription', authorize('payment:create'), paymentControll
 router.post('/verify-subscription', authorize('payment:create'), paymentController.verifySubscription);
 router.post('/cancel-subscription', authorize('payment:create'), paymentController.cancelSubscription);
 
-module.exports = router; 
+module.exports = router;
