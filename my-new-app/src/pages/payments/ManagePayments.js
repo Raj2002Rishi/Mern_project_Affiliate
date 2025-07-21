@@ -12,4 +12,4 @@ function ManagePayments() {
     }
 }
 
-export default ManagePayments; 
+export default ManagePayments;
