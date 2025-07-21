@@ -52,7 +52,7 @@ const authController = {
     },
 
     logout: (request, response) => {
-        response.clearCookie('jwtToken', token, {
+        response.clearCookie('jwtToken', {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
             path: '/',
