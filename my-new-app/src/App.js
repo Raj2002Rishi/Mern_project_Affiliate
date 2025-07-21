@@ -173,7 +173,7 @@ function App() {
     <Routes>
       <Route path="/" element={userDetails ?
         <UserLayout>
-          <Home />
+          <Navigate to='/dashboard' />
         </UserLayout> :
         <AppLayout>
           <Home />
