@@ -19,7 +19,7 @@ function Logout() {
     expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
 
             document.cookie = `refreshToken=;
-    expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
+    expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
             dispatch({
                 type: CLEAR_USER
             });
