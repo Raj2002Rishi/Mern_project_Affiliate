@@ -3,9 +3,12 @@ const bcrypt = require('bcryptjs');
 const Users = require('../model/Users');
 const { OAuth2Client } = require('google-auth-library');
 const { validationResult } = require('express-validator');
-const { sendMail } = require('../service/emailService');
+const { attemptToRefreshToken } = require('../util/authUtil');
+const sendMail = require('../service/emailService');
 
+// https://www.uuidgenerator.net/
 const secret = process.env.JWT_SECRET;
+const refreshSecret = process.env.JWT_REFRESH_TOKEN_SECRET;
 
 const authController = {
     login: async (request, response) => {
@@ -15,22 +18,26 @@ const authController = {
                 return response.status(401).json({ errors: errors.array() });
             }
 
+            // The body contains username and password because of the express.json()
+            // middleware configured in the server.js
             const { username, password } = request.body;
+
+            // Call Database to fetch user by the email
             const data = await Users.findOne({ email: username });
             if (!data) {
-                return response.status(401).json({ message: 'Invalid credentials' });
+                return response.status(401).json({ message: 'Invalid credentials ' });
             }
 
             const isMatch = await bcrypt.compare(password, data.password);
             if (!isMatch) {
-                return response.status(401).json({ message: 'Invalid credentials' });
+                return response.status(401).json({ message: 'Invalid credentials ' });
             }
 
             const user = {
                 id: data._id,
                 name: data.name,
                 email: data.email,
-                role: data.role || 'admin',
+                role: data.role ? data.role : 'admin',
                 adminId: data.adminId,
                 credits: data.credits,
                 subscription: data.subscription
@@ -42,9 +49,19 @@ const authController = {
                 secure: process.env.NODE_ENV === 'production',
                 path: '/',
                 sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax'
+
             });
 
-            response.json({ user, message: 'User authenticated' });
+            const refreshToken = jwt.sign(user, refreshSecret, { expiresIn: '7d' });
+            // store it in database if you want! Stroing in DB will
+            // make refresh tokens more secure
+            response.cookie('refreshToken', refreshToken, {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                path: '/',
+                sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax'
+            });
+            response.json({ user: user, message: 'User authenticated' });
         } catch (error) {
             console.log(error);
             response.status(500).json({ error: 'Internal server error' });
@@ -58,17 +75,31 @@ const authController = {
             path: '/',
             sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax'
         });
-        response.json({ message: 'Logout successful' });
+        response.json({ message: 'Logout successfull' });
     },
 
     isUserLoggedIn: async (request, response) => {
         const token = request.cookies.jwtToken;
+
         if (!token) {
             return response.status(401).json({ message: 'Unauthorized access' });
         }
 
         jwt.verify(token, secret, async (error, user) => {
             if (error) {
+                const refreshToken = request.cookies?.refreshToken;
+                if (refreshToken) {
+                    const { newAccessToken, user } =
+                        await attemptToRefreshToken(refreshToken);
+                    response.cookie('jwtToken', newAccessToken, {
+                        httpOnly: true,
+                        secure: process.env.NODE_ENV === 'production',
+                        path: '/',
+                        sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax'
+                    });
+                    console.log('Refresh token renewed the access token')
+                    return response.json({ message: 'User is logged in', user: user });
+                }
                 return response.status(401).json({ message: 'Unauthorized access' });
             } else {
                 const latestUserDetails = await Users.findById({ _id: user.id });
@@ -79,14 +110,20 @@ const authController = {
 
     register: async (request, response) => {
         try {
+            // Extract attributes from the request body
             const { username, password, name } = request.body;
+
+            // Firstly check if user already exist with the given email
             const data = await Users.findOne({ email: username });
             if (data) {
-                return response.status(401).json({ message: 'Account already exists with given email' });
+                return response.status(401)
+                    .json({ message: 'Account already exist with given email' });
             }
 
+            // Encrypt the password before saving the record to the database
             const encryptedPassword = await bcrypt.hash(password, 10);
 
+            // Create mongoose model object and set the record values
             const user = new Users({
                 email: username,
                 password: encryptedPassword,
@@ -94,7 +131,6 @@ const authController = {
                 role: 'admin'
             });
             await user.save();
-
             const userDetails = {
                 id: user._id,
                 name: user.name,
@@ -102,15 +138,14 @@ const authController = {
                 role: user.role,
                 credits: user.credits
             };
-
             const token = jwt.sign(userDetails, secret, { expiresIn: '1h' });
+
             response.cookie('jwtToken', token, {
                 httpOnly: true,
                 secure: process.env.NODE_ENV === 'production',
                 path: '/',
                 sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax'
             });
-
             response.json({ message: 'User registered', user: userDetails });
         } catch (error) {
             console.log(error);
@@ -147,13 +182,14 @@ const authController = {
             }
 
             const user = {
-                id: data._id || googleId,
+                id: data._id ? data._id : googleId,
                 username: email,
                 name: name,
-                role: data.role || 'admin',
+                role: data.role ? data.role : 'admin', // This is the ensure backward compatibility
                 credits: data.credits
             };
 
+            // making 1 min only for testing, revert it back to 1h
             const token = jwt.sign(user, secret, { expiresIn: '1h' });
             response.cookie('jwtToken', token, {
                 httpOnly: true,
@@ -162,75 +198,80 @@ const authController = {
                 sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax'
             });
 
-            response.json({ user, message: 'User authenticated' });
+            const refreshToken = jwt.sign(user, refreshSecret, { expiresIn: '7d' });
+            // store it in database if you want! Stroing in DB will
+            // make refresh tokens more secure
+            response.cookie('refreshToken', refreshToken, {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                path: '/',
+                sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax'
+            });
+            response.json({ user: user, message: 'User authenticated' });
         } catch (error) {
             console.log(error);
             return response.status(500).json({ message: 'Internal server error' });
         }
     },
 
-    sendResetPasswordToken: async (req, res) => {
+    sendResetPasswordToken: async (request, response) => {
         try {
-            const { email } = req.body;
-            if (!email) return res.status(400).json({ message: "Email is required" });
-
+            const { email } = request.body;
+            if (!email) {
+                return response.status(400).json({ message: 'Email is required' });
+            }
             const user = await Users.findOne({ email });
-            if (!user) return res.status(404).json({ message: "User not found" });
-
-            const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
-            const expiryTime = Date.now() + 15 * 60 * 1000;
-
-            user.resetPasswordToken = resetCode;
-            user.resetPasswordExpires = new Date(expiryTime);
+            if (!user) {
+                return response.status(404).json({ message: 'User not found' });
+            }
+            // Generate 6-digit code
+            const code = Math.floor(100000 + Math.random() * 900000).toString();
+            const expiry = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes expiry
+            user.resetPasswordCode = code;
+            user.resetPasswordExpiry = expiry;
             await user.save();
-
-            await sendMail(
-                email,
-                "Reset Your Password",
-                `Your password reset code is: ${resetCode}. It expires in 15 minutes.`
-            );
-
-            res.status(200).json({ message: "Reset code sent to your email" });
-        } catch (err) {
-            console.error("Error in sendResetPasswordToken:", err);
-            res.status(500).json({ message: "Server error" });
+            // Send code via email
+            await sendMail(email, 'Your Password Reset Code', `Your password reset code is: ${code}`);
+            return response.json({ message: 'Reset code sent to email' });
+        } catch (error) {
+            console.log(error);
+            return response.status(500).json({ message: 'Internal server error' });
         }
     },
 
-    resetPassword: async (req, res) => {
+    resetPassword: async (request, response) => {
         try {
-            const { email, code, newPassword } = req.body;
+            const { email, code, newPassword } = request.body;
             if (!email || !code || !newPassword) {
-                return res.status(400).json({ message: "All fields are required" });
+                return response.status(400).json({ message: 'Email, code, and new password are required' });
             }
-
             const user = await Users.findOne({ email });
-            if (
-                !user ||
-                !user.resetPasswordToken ||
-                !user.resetPasswordExpires ||
-                user.resetPasswordToken !== code ||
-                user.resetPasswordExpires < new Date()
-            ) {
-                return res.status(400).json({ message: "Invalid or expired reset code" });
+            if (!user || !user.resetPasswordCode || !user.resetPasswordExpiry) {
+                return response.status(400).json({ message: 'Invalid or expired code' });
             }
-
+            if (user.resetPasswordCode !== code) {
+                return response.status(400).json({ message: 'Invalid code' });
+            }
+            if (user.resetPasswordExpiry < new Date()) {
+                return response.status(400).json({ message: 'Code has expired' });
+            }
+            // Hash new password
             const hashedPassword = await bcrypt.hash(newPassword, 10);
             user.password = hashedPassword;
-            user.resetPasswordToken = null;
-            user.resetPasswordExpires = null;
+            user.resetPasswordCode = undefined;
+            user.resetPasswordExpiry = undefined;
             await user.save();
-
-            res.status(200).json({ message: "Password reset successful" });
-        } catch (err) {
-            console.error("Error in resetPassword:", err);
-            res.status(500).json({ message: "Server error" });
+            return response.json({ message: 'Password reset successful' });
+        } catch (error) {
+            console.log(error);
+            return response.status(500).json({ message: 'Internal server error' });
         }
-    }
+    },
 };
 
 module.exports = authController;
 
+//THIS IS MY CODE 
 // const jwt = require('jsonwebtoken');
 // const bcrypt = require('bcryptjs');
 // const Users = require('../model/Users');
@@ -251,12 +292,12 @@ module.exports = authController;
 //             const { username, password } = request.body;
 //             const data = await Users.findOne({ email: username });
 //             if (!data) {
-//                 return response.status(401).json({ message: 'Invalid credentials ' });
+//                 return response.status(401).json({ message: 'Invalid credentials' });
 //             }
 
 //             const isMatch = await bcrypt.compare(password, data.password);
 //             if (!isMatch) {
-//                 return response.status(401).json({ message: 'Invalid credentials ' });
+//                 return response.status(401).json({ message: 'Invalid credentials' });
 //             }
 
 //             const user = {
@@ -272,10 +313,11 @@ module.exports = authController;
 //             const token = jwt.sign(user, secret, { expiresIn: '1h' });
 //             response.cookie('jwtToken', token, {
 //                 httpOnly: true,
-//                 secure: true,
-//                 domain: 'localhost',
-//                 path: '/'
+//                 secure: process.env.NODE_ENV === 'production',
+//                 path: '/',
+//                 sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax'
 //             });
+
 //             response.json({ user, message: 'User authenticated' });
 //         } catch (error) {
 //             console.log(error);
@@ -284,7 +326,12 @@ module.exports = authController;
 //     },
 
 //     logout: (request, response) => {
-//         response.clearCookie('jwtToken');
+//         response.clearCookie('jwtToken', {
+//             httpOnly: true,
+//             secure: process.env.NODE_ENV === 'production',
+//             path: '/',
+//             sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax'
+//         });
 //         response.json({ message: 'Logout successful' });
 //     },
 
@@ -329,14 +376,15 @@ module.exports = authController;
 //                 role: user.role,
 //                 credits: user.credits
 //             };
-//             const token = jwt.sign(userDetails, secret, { expiresIn: '1h' });
 
+//             const token = jwt.sign(userDetails, secret, { expiresIn: '1h' });
 //             response.cookie('jwtToken', token, {
 //                 httpOnly: true,
-//                 secure: true,
-//                 domain: 'localhost',
-//                 path: '/'
+//                 secure: process.env.NODE_ENV === 'production',
+//                 path: '/',
+//                 sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax'
 //             });
+
 //             response.json({ message: 'User registered', user: userDetails });
 //         } catch (error) {
 //             console.log(error);
@@ -383,10 +431,11 @@ module.exports = authController;
 //             const token = jwt.sign(user, secret, { expiresIn: '1h' });
 //             response.cookie('jwtToken', token, {
 //                 httpOnly: true,
-//                 secure: true,
-//                 domain: 'localhost',
-//                 path: '/'
+//                 secure: process.env.NODE_ENV === 'production',
+//                 path: '/',
+//                 sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax'
 //             });
+
 //             response.json({ user, message: 'User authenticated' });
 //         } catch (error) {
 //             console.log(error);
@@ -394,11 +443,9 @@ module.exports = authController;
 //         }
 //     },
 
-//     // ✅ (1) Send Reset Password Code
 //     sendResetPasswordToken: async (req, res) => {
 //         try {
 //             const { email } = req.body;
-
 //             if (!email) return res.status(400).json({ message: "Email is required" });
 
 //             const user = await Users.findOne({ email });
@@ -424,17 +471,14 @@ module.exports = authController;
 //         }
 //     },
 
-//     // ✅ (2) Reset Password
 //     resetPassword: async (req, res) => {
 //         try {
 //             const { email, code, newPassword } = req.body;
-
 //             if (!email || !code || !newPassword) {
 //                 return res.status(400).json({ message: "All fields are required" });
 //             }
 
 //             const user = await Users.findOne({ email });
-
 //             if (
 //                 !user ||
 //                 !user.resetPasswordToken ||
