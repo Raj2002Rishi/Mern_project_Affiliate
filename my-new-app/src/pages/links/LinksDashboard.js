@@ -21,6 +21,9 @@ function LinksDashboard() {
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const permission = usePermission();
 
+    const [thumbnailFile, setThumbnailFile] = useState(null);
+    const [previewUrl, setPreviewUrl] = useState('');
+
     const [loading, setLoading] = useState(false);
     const [currentPage, setcurrentPage] = useState(0);
     const [pageSize, setPageSize] = useState(2);
@@ -113,6 +116,7 @@ function LinksDashboard() {
         event.preventDefault();
 
         if (validate()) {
+            setLoading(true);
             const body = {
                 campaign_title: formData.campaignTitle,
                 original_url: formData.originalUrl,
@@ -122,6 +126,13 @@ function LinksDashboard() {
                 withCredentials: true
             };
             try {
+                let thumbnailUrl = '';
+                if (thumbnailFile) {
+                    thumbnailUrl = await uploadToCloudinary(thumbnailFile);
+                    body.thumbnail = thumbnailUrl;
+                }
+
+
                 if (isEdit) {
                     await axios.put(
                         `${serverEndpoint}/links/${formData.id}`,
@@ -138,12 +149,32 @@ function LinksDashboard() {
                     originalUrl: "",
                     category: ""
                 });
+                setThumbnailFile(null);
+                setPreviewUrl('');
             } catch (error) {
                 setErrors({ message: error.response?.data?.message || 'Unable to add the Link, please try again' });
             } finally {
                 handleCloseModal();
             }
         }
+    };
+
+    const uploadToCloudinary = async () => {
+        const { data } = await axios.post(`${serverEndpoint}/links/generate-upload-signature`, {},
+            { withCredentials: true });
+
+        const formData = new FormData();
+        formData.append("file", thumbnailFile);
+        formData.append("signature", data.signature);
+        formData.append("api_key", data.apiKey);
+        formData.append("timestamp", data.timestamp);
+
+        const response = await axios.post(
+            `https://api.cloudinary.com/v1_1/${data.cloudName}/image/upload`,
+            formData
+        );
+
+        return response.data.secure_url;
     };
 
     const fetchLinks = async () => {
@@ -182,6 +213,16 @@ function LinksDashboard() {
     }, [currentPage, pageSize, searchQuery, sortModel]);
 
     const columns = [
+        {
+            field: 'thumbnail', headerName: 'Thumbnail', sortable: false, flex: 1,
+            renderCell: (params) => (
+                params.row.thumbnail ? (
+                    <img src={params.row.thumbnail} alt='thumbnail' style={{ maxHeight: '45px' }} />
+                ) : (
+                    <span style={{ color: '#888' }}>No Image</span>
+                )
+            ),
+        },
         { field: 'campaignTitle', headerName: 'Campaign', flex: 2 },
         {
             field: 'originalUrl', headerName: 'URL', flex: 3, renderCell: (params) => (
@@ -371,6 +412,25 @@ function LinksDashboard() {
                                 )}
                             </div>
 
+                            <div className='mb-2'>
+                                <label htmlFor='thumbnail'>Thumbnail</label>
+                                <input type='file' accept='image/*'
+                                    className='form-control'
+                                    onChange={(e) => {
+                                        const file = e.target.files[0];
+                                        if (file) {
+                                            setThumbnailFile(file);
+                                            setPreviewUrl(URL.createObjectURL(file));
+                                        }
+                                    }}
+                                />
+                                {previewUrl && (
+                                    <img src={previewUrl} alt='preview'
+                                        className='img-responsive border rounded-2'
+                                    />
+                                )}
+                            </div>
+
                             <div className="d-grid">
                                 <button type="submit" className="btn btn-primary">Submit</button>
                             </div>
@@ -400,7 +460,6 @@ function LinksDashboard() {
 }
 
 export default LinksDashboard;
-
 
 //THIS IS MY CODE 
 // import IconButton from '@mui/material/IconButton';
